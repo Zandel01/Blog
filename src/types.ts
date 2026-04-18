@@ -56,7 +56,7 @@ export interface AppData {
 
 export const DEFAULT_THEME: BlogTheme = {
   backgroundColor: '#FFFDF0',
-  profileImage: 'input_file_1.png',
+  profileImage: 'https://images.unsplash.com/photo-1535713875002-d1d0cf377fde?q=80&w=2080&auto=format&fit=crop',
   profileCoverImage: 'https://images.unsplash.com/photo-1516321497487-e288fb19713f?q=80&w=2070&auto=format&fit=crop',
   profileName: 'Zandel Ragay',
   profileDesignation: 'group member',

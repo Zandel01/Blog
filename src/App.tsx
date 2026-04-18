@@ -55,6 +55,15 @@ import {
   useSortable
 } from '@dnd-kit/sortable';
 import { CSS } from '@dnd-kit/utilities';
+import { 
+  collection, 
+  doc, 
+  getDoc, 
+  getDocs, 
+  setDoc, 
+  getDocFromServer
+} from 'firebase/firestore';
+import { db } from './firebase';
 import { cn } from './lib/utils';
 import { 
   DEFAULT_BLOG_DATA, 
@@ -136,7 +145,10 @@ const TypewriterText = ({ messages, color }: { messages: string[], color?: strin
 
   useEffect(() => {
     const handleTyping = () => {
-      const currentFullText = messages[index % messages.length] || '';
+      const messagesSource = Array.isArray(messages) ? messages : [];
+      if (messagesSource.length === 0) return;
+
+      const currentFullText = messagesSource[index % messagesSource.length] || '';
       
       if (!isDeleting) {
         if (displayText.length < currentFullText.length) {
@@ -211,22 +223,40 @@ export default function App() {
 
       // 1. Initial local load for speed
       const savedAppData = localStorage.getItem('zandel_blog_app_data');
-      let localAppData: AppData = savedAppData ? JSON.parse(savedAppData) : { sites: [], currentSiteId: 'default' };
-      
-      // 2. Try to load fresh data from server
-      let mergedSites: BlogSite[] = [...localAppData.sites];
+      let localAppData: AppData;
       try {
-        const response = await fetch('/api/sites');
-        if (response.ok) {
-          const serverSites: BlogSite[] = await response.json();
+        localAppData = savedAppData ? JSON.parse(savedAppData) : { sites: [], currentSiteId: 'default' };
+        if (!localAppData || typeof localAppData !== 'object' || !Array.isArray(localAppData.sites)) {
+          localAppData = { sites: [], currentSiteId: 'default' };
+        }
+      } catch (e) {
+        localAppData = { sites: [], currentSiteId: 'default' };
+      }
+      
+      // 2. Try to load fresh data from Firebase Cloud
+      let mergedSites: BlogSite[] = Array.isArray(localAppData.sites) ? [...localAppData.sites] : [];
+      try {
+        const querySnapshot = await getDocs(collection(db, 'sites'));
+        const serverSites: BlogSite[] = [];
+        querySnapshot.forEach((doc) => {
+          serverSites.push(doc.data() as BlogSite);
+        });
+
+        if (serverSites.length > 0) {
           const mergedMap = new Map();
           // Local first, then server overwrites with most recent
-          localAppData.sites.forEach(s => mergedMap.set(s.id, s));
-          serverSites.forEach(s => mergedMap.set(s.id, s));
+          if (Array.isArray(localAppData.sites)) {
+            localAppData.sites.forEach(s => {
+              if (s && s.id) mergedMap.set(s.id, s);
+            });
+          }
+          serverSites.forEach(s => {
+            if (s && s.id) mergedMap.set(s.id, s);
+          });
           mergedSites = Array.from(mergedMap.values());
         }
       } catch (e) {
-        console.warn("Server sync unavailable, using local data", e);
+        console.warn("Cloud sync unavailable, using local data", e);
       }
 
       // 3. Fallback for new users
@@ -251,19 +281,20 @@ export default function App() {
 
       if (siteIdFromUrl) {
         try {
-          const res = await fetch(`/api/sites/${siteIdFromUrl}`);
-          if (res.ok) {
-            const freshSite = await res.json();
+          const siteDoc = await getDocFromServer(doc(db, 'sites', siteIdFromUrl));
+          if (siteDoc.exists()) {
+            const freshSite = siteDoc.data() as BlogSite;
             activeSite = freshSite;
             // Update the local list with this fresh version
             setSites(prev => {
+              if (!Array.isArray(prev)) return [freshSite];
               const map = new Map(prev.map(s => [s.id, s]));
               map.set(freshSite.id, freshSite);
               return Array.from(map.values());
             });
           }
         } catch (e) {
-          console.error("Failed to fetch fresh shared site", e);
+          console.error("Failed to fetch fresh shared site from cloud", e);
         }
       }
 
@@ -271,8 +302,8 @@ export default function App() {
 
       if (activeSite) {
         // Migration/Update: Use new profile photo if still on old default
-        if (activeSite.theme.profileImage === 'input_file_0.png') {
-          activeSite.theme.profileImage = 'input_file_1.png';
+        if (activeSite.theme.profileImage === 'input_file_0.png' || activeSite.theme.profileImage === 'input_file_1.png') {
+          activeSite.theme.profileImage = 'input_file_2.png';
         }
         
         setCurrentSiteId(activeSite.id);
@@ -290,7 +321,7 @@ export default function App() {
     try {
       const updatedSite: BlogSite = {
         id: currentSiteId,
-        name: sites.find(s => s.id === currentSiteId)?.name || 'Untitled Site',
+        name: (Array.isArray(sites) ? sites.find(s => s.id === currentSiteId) : null)?.name || 'Untitled Site',
         blogData,
         theme,
         socials,
@@ -307,18 +338,13 @@ export default function App() {
       localStorage.setItem('zandel_blog_app_data', JSON.stringify(appData));
       setSites(newSites);
       
-      // Save to server for sharing
+      // Save to cloud for sharing
       try {
         setSyncStatus('syncing');
-        const res = await fetch('/api/sites', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify(updatedSite)
-        });
-        if (res.ok) setSyncStatus('saved');
-        else setSyncStatus('error');
+        await setDoc(doc(db, 'sites', currentSiteId), updatedSite);
+        setSyncStatus('saved');
       } catch (e) {
-        console.warn("Failed to sync to server", e);
+        console.warn("Failed to sync to cloud", e);
         setSyncStatus('error');
       }
 
@@ -340,13 +366,13 @@ export default function App() {
 
   // Auto-save logic
   useEffect(() => {
-    if (blogData.length === 0) return;
+    if (!Array.isArray(blogData) || blogData.length === 0) return;
     
     const timer = setTimeout(async () => {
       try {
         const updatedSite: BlogSite = {
           id: currentSiteId,
-          name: sites.find(s => s.id === currentSiteId)?.name || 'Untitled Site',
+          name: (Array.isArray(sites) ? sites.find(s => s.id === currentSiteId) : null)?.name || 'Untitled Site',
           blogData,
           theme,
           socials,
@@ -363,19 +389,14 @@ export default function App() {
         localStorage.setItem('zandel_blog_app_data', JSON.stringify(appData));
         setSites(newSites);
 
-        // 2. Global Sync (ONLY IF ADMIN/EDITOR)
+        // 2. Global Cloud Sync (ONLY IF ADMIN/EDITOR)
         if (isAdmin) {
           setSyncStatus('syncing');
           try {
-            const res = await fetch('/api/sites', {
-              method: 'POST',
-              headers: { 'Content-Type': 'application/json' },
-              body: JSON.stringify(updatedSite)
-            });
-            if (res.ok) setSyncStatus('saved');
-            else setSyncStatus('error');
+            await setDoc(doc(db, 'sites', currentSiteId), updatedSite);
+            setSyncStatus('saved');
           } catch (err) {
-            console.warn("Silent sync failed", err);
+            console.warn("Silent cloud sync failed", err);
             setSyncStatus('error');
           }
         }
@@ -408,53 +429,58 @@ export default function App() {
 
   const createNewSite = () => {
     const newId = Date.now().toString();
+    const sitesSource = Array.isArray(sites) ? sites : [];
     const newSite: BlogSite = {
       id: newId,
-      name: `Website ${sites.length + 1}`,
+      name: `Website ${sitesSource.length + 1}`,
       blogData: DEFAULT_BLOG_DATA,
       theme: DEFAULT_THEME,
       socials: DEFAULT_SOCIALS,
       updatedAt: Date.now()
     };
-    const newSites = [newSite, ...sites];
+    const newSites = [newSite, ...sitesSource];
     setSites(newSites);
     saveAppData(newSites, currentSiteId);
   };
 
   const duplicateSite = (site: BlogSite) => {
     const newId = Date.now().toString();
+    const sitesSource = Array.isArray(sites) ? sites : [];
     const newSite: BlogSite = {
       ...site,
       id: newId,
       name: `${site.name} (Copy)`,
       updatedAt: Date.now()
     };
-    const newSites = [newSite, ...sites];
+    const newSites = [newSite, ...sitesSource];
     setSites(newSites);
     saveAppData(newSites, currentSiteId);
   };
 
   const deleteSite = (id: string) => {
-    if (sites.length <= 1) {
+    const sitesSource = Array.isArray(sites) ? sites : [];
+    if (sitesSource.length <= 1) {
       alert("You must have at least one website.");
       return;
     }
     if (confirm('Delete this website permanently?')) {
-      const newSites = sites.filter(s => s.id !== id);
+      const newSites = sitesSource.filter(s => s.id !== id);
       setSites(newSites);
-      if (currentSiteId === id) {
+      const targetId = currentSiteId === id && newSites.length > 0 ? newSites[0].id : currentSiteId;
+      
+      if (currentSiteId === id && newSites.length > 0) {
         const nextSite = newSites[0];
         setCurrentSiteId(nextSite.id);
         setBlogData(nextSite.blogData);
         setTheme(nextSite.theme);
         setSocials(nextSite.socials);
       }
-      saveAppData(newSites, currentSiteId === id ? newSites[0].id : currentSiteId);
+      saveAppData(newSites, targetId);
     }
   };
 
   const switchSite = (id: string) => {
-    const activeSite = sites.find(s => s.id === id);
+    const activeSite = Array.isArray(sites) ? sites.find(s => s.id === id) : null;
     if (activeSite) {
       // Small delay for UX transition
       setShowDashboard(false);
@@ -478,25 +504,21 @@ export default function App() {
   };
 
   const shareSite = (id: string) => {
-    const site = sites.find(s => s.id === id);
+    const site = Array.isArray(sites) ? sites.find(s => s.id === id) : null;
     if (!site) return;
 
-    // First save to server to ensure the link works for others immediately
+    // First save to cloud to ensure the link works for others immediately
     // This is essentially a "publish" action
-    fetch('/api/sites', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(site)
-    }).then(() => {
+    setDoc(doc(db, 'sites', id), site).then(() => {
       const shareUrl = `${window.location.origin}${window.location.pathname}?s=${id}`;
       navigator.clipboard.writeText(shareUrl).then(() => {
-        alert('Site published and share link copied! Anyone with this link will now see your latest updates.');
+        alert('Site published to cloud and share link copied! Anyone with this link will now see your latest updates.');
       });
     }).catch(err => {
-      console.error("Failed to sync for sharing", err);
+      console.error("Failed to sync to cloud for sharing", err);
       const shareUrl = `${window.location.origin}${window.location.pathname}?s=${id}`;
       navigator.clipboard.writeText(shareUrl).then(() => {
-        alert('Share link copied! (Server sync failed, updates might not show for others yet).');
+        alert('Share link copied! (Cloud sync failed, updates might not show for others yet).');
       });
     });
   };
@@ -548,21 +570,21 @@ export default function App() {
       alignment: 'center',
       layout: 'standard',
     };
-    setBlogData([...blogData, newSection]);
+    setBlogData(prev => Array.isArray(prev) ? [...prev, newSection] : [newSection]);
     setEditingItemId(newSection.id);
   };
 
   const toggleHide = (id: string) => {
-    setBlogData(blogData.map(s => s.id === id ? { ...s, isHidden: !s.isHidden } : s));
+    setBlogData(prev => Array.isArray(prev) ? prev.map(s => s.id === id ? { ...s, isHidden: !s.isHidden } : s) : []);
   };
 
   const updateSection = (id: string, updates: Partial<BlogItem>) => {
-    setBlogData(blogData.map(s => s.id === id ? { ...s, ...updates } : s));
+    setBlogData(prev => Array.isArray(prev) ? prev.map(s => s.id === id ? { ...s, ...updates } : s) : []);
   };
 
   const deleteSection = (id: string) => {
     if (confirm('Delete this section?')) {
-      setBlogData(blogData.filter(s => s.id !== id));
+      setBlogData(prev => Array.isArray(prev) ? prev.filter(s => s.id !== id) : []);
       if (editingItemId === id) setEditingItemId(null);
     }
   };
@@ -587,15 +609,18 @@ export default function App() {
   };
 
   const addSocial = () => {
-    setSocials([...socials, { id: Date.now().toString(), platform: 'facebook', url: '' }]);
+    setSocials(prev => Array.isArray(prev) 
+      ? [...prev, { id: Date.now().toString(), platform: 'facebook', url: '' }]
+      : [{ id: Date.now().toString(), platform: 'facebook', url: '' }]
+    );
   };
 
   const updateSocial = (id: string, updates: Partial<SocialLink>) => {
-    setSocials(socials.map(s => s.id === id ? { ...s, ...updates } : s));
+    setSocials(prev => Array.isArray(prev) ? prev.map(s => s.id === id ? { ...s, ...updates } : s) : []);
   };
 
   const deleteSocial = (id: string) => {
-    setSocials(socials.filter(s => s.id !== id));
+    setSocials(prev => Array.isArray(prev) ? prev.filter(s => s.id !== id) : []);
   };
 
   const resetToDefault = () => {
@@ -609,7 +634,7 @@ export default function App() {
   const fileInputRef = useRef<HTMLInputElement>(null);
   const profileUploadRef = useRef<HTMLInputElement>(null);
 
-  const activeItem = blogData.find(i => i.id === editingItemId);
+  const activeItem = Array.isArray(blogData) ? blogData.find(i => i.id === editingItemId) : null;
 
   return (
     <div 
@@ -697,8 +722,8 @@ export default function App() {
               <div className="text-xs font-bold tracking-widest text-slate-400 uppercase mb-4">{theme.profileDesignation}</div>
               
               <div className="flex gap-4 mb-6">
-                 {socials.map(s => {
-                   const Icon = PLATFORM_ICONS[s.platform];
+                 {Array.isArray(socials) && socials.map(s => {
+                   const Icon = PLATFORM_ICONS[s.platform] || LinkIcon;
                    return (
                      <a 
                        key={s.id}
@@ -726,11 +751,12 @@ export default function App() {
         <div className="flex flex-col gap-8">
           {/* Typewriter Banner */}
           <div 
-             className="h-16 rounded-2xl flex items-center px-8 text-white font-bold text-lg shadow-vibrant"
+             className="h-20 rounded-[32px] flex items-center px-10 text-white font-black text-xl shadow-xl backdrop-blur-sm border-4 border-white/20 relative overflow-hidden group"
              style={{ backgroundColor: theme.bannerBgColor || '#40E0D0' }}
           >
+            <div className="absolute inset-0 bg-gradient-to-r from-white/10 to-transparent opacity-0 group-hover:opacity-100 transition-opacity duration-700" />
             <TypewriterText 
-              messages={theme.bannerMessages || DEFAULT_THEME.bannerMessages} 
+              messages={Array.isArray(theme.bannerMessages) ? theme.bannerMessages : DEFAULT_THEME.bannerMessages} 
               color={theme.typewriterColor}
             />
           </div>
@@ -741,11 +767,11 @@ export default function App() {
             onDragEnd={handleDragEnd}
           >
             <SortableContext 
-              items={blogData.map(i => i.id)}
+              items={Array.isArray(blogData) ? blogData.map(i => i.id) : []}
               strategy={verticalListSortingStrategy}
             >
               <div className="space-y-12 pb-24">
-                {blogData.map((section) => (
+                {Array.isArray(blogData) && blogData.map((section) => (
                   <SortableItem key={section.id} id={section.id}>
                     <motion.div
                       variants={sectionVariants}
@@ -926,7 +952,7 @@ export default function App() {
 
               {/* List */}
               <div className="flex-1 overflow-auto p-8 grid grid-cols-1 md:grid-cols-2 gap-6">
-                {sites.map(site => (
+                {Array.isArray(sites) && sites.map(site => (
                   <div key={site.id} className={cn(
                     "group relative p-6 rounded-[32px] border-2 transition-all hover:shadow-xl",
                     currentSiteId === site.id ? "border-accent bg-accent/5" : "border-slate-50 bg-slate-50/50 hover:bg-white hover:border-slate-200"
@@ -1037,8 +1063,8 @@ export default function App() {
                   </div>
 
                   <div className="space-y-4">
-                    {blogData.length === 0 && <p className="text-slate-400 text-center py-10 italic">No sections yet. Add your first one!</p>}
-                    {blogData.map((item) => (
+                    {(Array.isArray(blogData) && blogData.length === 0) && <p className="text-slate-400 text-center py-10 italic">No sections yet. Add your first one!</p>}
+                    {Array.isArray(blogData) && blogData.map((item) => (
                       <div 
                         key={item.id}
                         className={cn(
@@ -1324,14 +1350,14 @@ export default function App() {
                                 <button 
                                   key={c}
                                   onClick={() => setTheme({...theme, backgroundColor: c, backgroundImage: undefined})}
-                                  className={cn("w-7 h-7 rounded-full border border-slate-200 transition-transform hover:scale-110", theme.backgroundColor === c && "ring-2 ring-accent ring-offset-2")}
+                                  className={cn("w-10 h-10 rounded-xl border-4 transition-all scale-100 hover:scale-110 shadow-sm", theme.backgroundColor === c ? "border-slate-800" : "border-white")}
                                   style={{ backgroundColor: c }}
                                 />
                               ))}
                               <input 
                                 type="color" value={theme.backgroundColor || '#ffffff'}
                                 onChange={e => setTheme({...theme, backgroundColor: e.target.value, backgroundImage: undefined})}
-                                className="w-8 h-8 rounded-full border-2 border-white shadow-sm cursor-pointer overflow-hidden p-0"
+                                className="w-10 h-10 rounded-xl border-4 border-white shadow-sm cursor-pointer overflow-hidden p-0"
                               />
                            </div>
                          </div>
@@ -1353,7 +1379,7 @@ export default function App() {
                          </div>
                          <div className="space-y-3">
                            <span className="text-[10px] font-bold text-slate-400 uppercase tracking-widest block">Banner Messages</span>
-                           {theme.bannerMessages.map((msg, i) => (
+                           {Array.isArray(theme.bannerMessages) && theme.bannerMessages.map((msg, i) => (
                              <input 
                                key={i}
                                className="w-full p-2 bg-slate-50 rounded-lg border border-slate-100 outline-none focus:border-accent text-xs"
@@ -1464,7 +1490,7 @@ export default function App() {
                         <button onClick={addSocial} className="p-2 bg-secondary text-white rounded-lg shadow-sm hover:scale-105 transition-transform"><Plus size={14} /></button>
                       </div>
                       <div className="space-y-3">
-                         {socials.map(s => (
+                         {Array.isArray(socials) && socials.map(s => (
                            <div key={s.id} className="flex gap-2 items-center bg-slate-50 p-2 rounded-xl">
                               <select 
                                 value={s.platform}
