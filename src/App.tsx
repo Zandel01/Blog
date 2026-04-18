@@ -189,6 +189,7 @@ export default function App() {
   const [editingItemId, setEditingItemId] = useState<string | null>(null);
   const [uploadProgress, setUploadProgress] = useState<number | null>(null);
   const [isStorageFull, setIsStorageFull] = useState(false);
+  const [syncStatus, setSyncStatus] = useState<'idle' | 'syncing' | 'saved' | 'error'>('idle');
 
   // Multi-site state
   const [sites, setSites] = useState<BlogSite[]>([]);
@@ -303,13 +304,17 @@ export default function App() {
       
       // Save to server for sharing
       try {
-        await fetch('/api/sites', {
+        setSyncStatus('syncing');
+        const res = await fetch('/api/sites', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify(updatedSite)
         });
+        if (res.ok) setSyncStatus('saved');
+        else setSyncStatus('error');
       } catch (e) {
         console.warn("Failed to sync to server", e);
+        setSyncStatus('error');
       }
 
       // Legacy support for backward compatibility
@@ -331,6 +336,7 @@ export default function App() {
   // Auto-save logic
   useEffect(() => {
     if (blogData.length === 0) return;
+    
     const timer = setTimeout(async () => {
       try {
         const updatedSite: BlogSite = {
@@ -348,29 +354,34 @@ export default function App() {
           currentSiteId
         };
 
-        // Local background save
+        // 1. Local Persistence
         localStorage.setItem('zandel_blog_app_data', JSON.stringify(appData));
         setSites(newSites);
 
-        // Server background sync (only if we're essentially the "owner" or editing)
-        // We use a simple fetch since it's an auto-sync
-        try {
-          await fetch('/api/sites', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify(updatedSite)
-          });
-        } catch (err) {
-          console.warn("Silent sync failed", err);
+        // 2. Global Sync (ONLY IF ADMIN/EDITOR)
+        if (isAdmin) {
+          setSyncStatus('syncing');
+          try {
+            const res = await fetch('/api/sites', {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify(updatedSite)
+            });
+            if (res.ok) setSyncStatus('saved');
+            else setSyncStatus('error');
+          } catch (err) {
+            console.warn("Silent sync failed", err);
+            setSyncStatus('error');
+          }
         }
 
         setIsStorageFull(false);
       } catch (e) {
         setIsStorageFull(true);
       }
-    }, 3000); // 3 seconds debounce for auto-sync
+    }, 2000); 
     return () => clearTimeout(timer);
-  }, [blogData, theme, socials, currentSiteId]);
+  }, [blogData, theme, socials, currentSiteId, isAdmin]);
 
   const getStorageUsage = () => {
     const data = JSON.stringify(blogData) + JSON.stringify(theme) + JSON.stringify(socials);
@@ -607,20 +618,35 @@ export default function App() {
         <div className="font-extrabold text-2xl tracking-tighter">
           {theme.logoText || 'Z.R'}
         </div>
-        <button 
-          onClick={handleAdminToggle}
-          className={cn(
-            "p-3 rounded-full transition-all shadow-vibrant hover:scale-110 active:scale-95 relative",
-            isAdmin ? "bg-accent text-white" : "bg-accent text-white"
-          )}
-        >
-          {isStorageFull && (
-            <div className="absolute -top-1 -right-1 w-4 h-4 bg-red-500 rounded-full border-2 border-white flex items-center justify-center animate-pulse">
-              <span className="text-[8px] font-bold text-white">!</span>
+        <div className="flex items-center gap-6">
+          {isAdmin && (
+            <div className="flex items-center gap-2 px-3 py-1 bg-slate-50 rounded-full border border-slate-100">
+               <div className={cn(
+                 "w-1.5 h-1.5 rounded-full animate-pulse",
+                 syncStatus === 'syncing' ? "bg-amber-400" : 
+                 syncStatus === 'saved' ? "bg-emerald-400" : 
+                 syncStatus === 'error' ? "bg-red-400" : "bg-slate-300"
+               )} />
+               <span className="text-[9px] font-mono font-bold text-slate-400 uppercase tracking-tighter">
+                 {syncStatus === 'syncing' ? 'Syncing...' : syncStatus === 'saved' ? 'Saved' : syncStatus === 'error' ? 'Sync Error' : 'Local'}
+               </span>
             </div>
           )}
-          {isAdmin ? <Settings2 size={20} /> : <Pencil size={20} />}
-        </button>
+          <button 
+            onClick={handleAdminToggle}
+            className={cn(
+              "p-3 rounded-full transition-all shadow-vibrant hover:scale-110 active:scale-95 relative",
+              isAdmin ? "bg-accent text-white" : "bg-accent text-white"
+            )}
+          >
+            {isStorageFull && (
+              <div className="absolute -top-1 -right-1 w-4 h-4 bg-red-500 rounded-full border-2 border-white flex items-center justify-center animate-pulse">
+                <span className="text-[8px] font-bold text-white">!</span>
+              </div>
+            )}
+            {isAdmin ? <Settings2 size={20} /> : <Pencil size={20} />}
+          </button>
+        </div>
       </header>
 
       {/* Main Container */}
@@ -738,7 +764,7 @@ export default function App() {
                             <div className="space-y-4">
                               <h2 className="text-2xl font-extrabold text-accent">{section.title}</h2>
                               <p 
-                                className="leading-relaxed text-ink opacity-80"
+                                className="leading-relaxed text-ink opacity-80 whitespace-pre-wrap"
                                 style={{ fontSize: `${10 + (section.fontSize || 50) * 0.4}px` }}
                               >
                                 {section.content}
