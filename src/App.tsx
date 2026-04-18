@@ -31,7 +31,12 @@ import {
   Columns,
   Square,
   Settings2,
-  ImagePlus
+  ImagePlus,
+  Copy,
+  Link as LinkIcon,
+  ExternalLink,
+  Calendar,
+  Globe
 } from 'lucide-react';
 import { 
   DndContext, 
@@ -60,7 +65,9 @@ import {
   SectionType, 
   SocialLink,
   Alignment,
-  LayoutMode 
+  LayoutMode,
+  BlogSite,
+  AppData
 } from './types';
 
 // --- Types Fix ---
@@ -181,6 +188,14 @@ export default function App() {
   const [passwordInput, setPasswordInput] = useState('');
   const [editingItemId, setEditingItemId] = useState<string | null>(null);
   const [uploadProgress, setUploadProgress] = useState<number | null>(null);
+  const [isStorageFull, setIsStorageFull] = useState(false);
+
+  // Multi-site state
+  const [sites, setSites] = useState<BlogSite[]>([]);
+  const [currentSiteId, setCurrentSiteId] = useState<string>('default');
+  const [showDashboard, setShowDashboard] = useState(false);
+  const [showDashboardLogin, setShowDashboardLogin] = useState(false);
+  const [dashboardPassword, setDashboardPassword] = useState('');
 
   const sensors = useSensors(
     useSensor(PointerSensor, { activationConstraint: { distance: 8 } }),
@@ -189,33 +204,120 @@ export default function App() {
 
   // Load Data
   useEffect(() => {
-    const savedData = localStorage.getItem('zandel_blog_v3_data');
-    const savedTheme = localStorage.getItem('zandel_blog_v3_theme');
-    const savedSocials = localStorage.getItem('zandel_blog_v3_socials');
-    
-    if (savedData) setBlogData(JSON.parse(savedData));
-    else setBlogData(DEFAULT_BLOG_DATA);
+    const loadAppData = async () => {
+      const urlParams = new URLSearchParams(window.location.search);
+      const siteIdFromUrl = urlParams.get('s');
 
-    if (savedTheme) {
-      const parsedTheme = JSON.parse(savedTheme);
-      setTheme({ ...DEFAULT_THEME, ...parsedTheme });
-    }
-    if (savedSocials) setSocials(JSON.parse(savedSocials));
-    else setSocials(DEFAULT_SOCIALS);
+      // Try to load from server first
+      let serverSites: BlogSite[] = [];
+      try {
+        const response = await fetch('/api/sites');
+        if (response.ok) {
+          serverSites = await response.json();
+        }
+      } catch (e) {
+        console.error("Failed to load sites from server", e);
+      }
+
+      const savedAppData = localStorage.getItem('zandel_blog_app_data');
+      let localAppData: AppData = savedAppData ? JSON.parse(savedAppData) : { sites: [], currentSiteId: 'default' };
+
+      // Merge local and server sites, server takes priority if site exists on both
+      const mergedSitesMap = new Map();
+      localAppData.sites.forEach(s => mergedSitesMap.set(s.id, s));
+      serverSites.forEach(s => mergedSitesMap.set(s.id, s));
+      const mergedSites = Array.from(mergedSitesMap.values());
+
+      // If no sites exist yet, create the default one
+      if (mergedSites.length === 0) {
+        const defaultSite: BlogSite = {
+          id: 'default',
+          name: 'Website 1',
+          blogData: DEFAULT_BLOG_DATA,
+          theme: DEFAULT_THEME,
+          socials: DEFAULT_SOCIALS,
+          updatedAt: Date.now()
+        };
+        mergedSites.push(defaultSite);
+      }
+
+      setSites(mergedSites);
+
+      const targetId = siteIdFromUrl || localAppData.currentSiteId || 'default';
+      let activeSite = mergedSites.find(s => s.id === targetId);
+
+      // If viewing a shared site that isn't in our local list, fetch it specifically
+      if (!activeSite && siteIdFromUrl) {
+        try {
+          const res = await fetch(`/api/sites/${siteIdFromUrl}`);
+          if (res.ok) {
+            activeSite = await res.json();
+          }
+        } catch (e) {
+          console.error("Failed to fetch specific site", e);
+        }
+      }
+
+      // Final fallback
+      if (!activeSite) activeSite = mergedSites[0];
+
+      if (activeSite) {
+        setCurrentSiteId(activeSite.id);
+        setBlogData(activeSite.blogData);
+        setTheme(activeSite.theme);
+        setSocials(activeSite.socials);
+      }
+    };
+
+    loadAppData();
   }, []);
 
   // Save Data
-  const saveData = () => {
+  const saveData = async () => {
     try {
+      const updatedSite: BlogSite = {
+        id: currentSiteId,
+        name: sites.find(s => s.id === currentSiteId)?.name || 'Untitled Site',
+        blogData,
+        theme,
+        socials,
+        updatedAt: Date.now()
+      };
+
+      const newSites = sites.map(s => s.id === currentSiteId ? updatedSite : s);
+      const appData: AppData = {
+        sites: newSites,
+        currentSiteId
+      };
+
+      // Save to local storage
+      localStorage.setItem('zandel_blog_app_data', JSON.stringify(appData));
+      setSites(newSites);
+      
+      // Save to server for sharing
+      try {
+        await fetch('/api/sites', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(updatedSite)
+        });
+      } catch (e) {
+        console.warn("Failed to sync to server", e);
+      }
+
+      // Legacy support for backward compatibility
       localStorage.setItem('zandel_blog_v3_data', JSON.stringify(blogData));
       localStorage.setItem('zandel_blog_v3_theme', JSON.stringify(theme));
       localStorage.setItem('zandel_blog_v3_socials', JSON.stringify(socials));
-      alert('All changes saved successfully!');
+
+      alert('All changes saved and synced for sharing!');
       setShowAdminModal(false);
       setIsAdmin(false);
+      setIsStorageFull(false);
     } catch (e) {
-      console.error('Storage error:', e);
-      alert('Error: Could not save all changes. You might have uploaded files that are too large for the browser memory.');
+      console.error(e);
+      setIsStorageFull(true);
+      alert('⚠️ STORAGE QUOTA EXCEEDED!\n\nYou have uploaded too many high-quality images. Please delete some large sections or use external links (URLs) instead of uploading files directly.');
     }
   };
 
@@ -224,15 +326,152 @@ export default function App() {
     if (blogData.length === 0) return;
     const timer = setTimeout(() => {
       try {
-        localStorage.setItem('zandel_blog_v3_data', JSON.stringify(blogData));
-        localStorage.setItem('zandel_blog_v3_theme', JSON.stringify(theme));
-        localStorage.setItem('zandel_blog_v3_socials', JSON.stringify(socials));
+        const updatedSite: BlogSite = {
+          id: currentSiteId,
+          name: sites.find(s => s.id === currentSiteId)?.name || 'Untitled Site',
+          blogData,
+          theme,
+          socials,
+          updatedAt: Date.now()
+        };
+
+        const newSites = sites.map(s => s.id === currentSiteId ? updatedSite : s);
+        const appData: AppData = {
+          sites: newSites,
+          currentSiteId
+        };
+
+        localStorage.setItem('zandel_blog_app_data', JSON.stringify(appData));
+        setSites(newSites);
+
+        setIsStorageFull(false);
       } catch (e) {
-        console.error('Auto-save storage error:', e);
+        setIsStorageFull(true);
       }
     }, 2000);
     return () => clearTimeout(timer);
-  }, [blogData, theme, socials]);
+  }, [blogData, theme, socials, currentSiteId]);
+
+  const getStorageUsage = () => {
+    const data = JSON.stringify(blogData) + JSON.stringify(theme) + JSON.stringify(socials);
+    const kbs = (data.length * 2) / 1024; // approx size in KB
+    // 5MB is roughly 5120KB
+    return Math.min((kbs / 5120) * 100, 100).toFixed(1);
+  };
+
+  // Site Dashboard Actions
+  const handleDashboardLogin = () => {
+    if (dashboardPassword === '1') {
+      setShowDashboardLogin(false);
+      setShowDashboard(true);
+      setDashboardPassword('');
+    } else {
+      alert('Incorrect Password');
+    }
+  };
+
+  const createNewSite = () => {
+    const newId = Date.now().toString();
+    const newSite: BlogSite = {
+      id: newId,
+      name: `Website ${sites.length + 1}`,
+      blogData: DEFAULT_BLOG_DATA,
+      theme: DEFAULT_THEME,
+      socials: DEFAULT_SOCIALS,
+      updatedAt: Date.now()
+    };
+    const newSites = [newSite, ...sites];
+    setSites(newSites);
+    saveAppData(newSites, currentSiteId);
+  };
+
+  const duplicateSite = (site: BlogSite) => {
+    const newId = Date.now().toString();
+    const newSite: BlogSite = {
+      ...site,
+      id: newId,
+      name: `${site.name} (Copy)`,
+      updatedAt: Date.now()
+    };
+    const newSites = [newSite, ...sites];
+    setSites(newSites);
+    saveAppData(newSites, currentSiteId);
+  };
+
+  const deleteSite = (id: string) => {
+    if (sites.length <= 1) {
+      alert("You must have at least one website.");
+      return;
+    }
+    if (confirm('Delete this website permanently?')) {
+      const newSites = sites.filter(s => s.id !== id);
+      setSites(newSites);
+      if (currentSiteId === id) {
+        const nextSite = newSites[0];
+        setCurrentSiteId(nextSite.id);
+        setBlogData(nextSite.blogData);
+        setTheme(nextSite.theme);
+        setSocials(nextSite.socials);
+      }
+      saveAppData(newSites, currentSiteId === id ? newSites[0].id : currentSiteId);
+    }
+  };
+
+  const switchSite = (id: string) => {
+    const activeSite = sites.find(s => s.id === id);
+    if (activeSite) {
+      // Small delay for UX transition
+      setShowDashboard(false);
+      setTimeout(() => {
+        setCurrentSiteId(activeSite.id);
+        setBlogData(activeSite.blogData);
+        setTheme(activeSite.theme);
+        setSocials(activeSite.socials);
+        window.history.pushState({}, '', `?s=${id}`);
+      }, 300);
+    }
+  };
+
+  const renameSite = (id: string) => {
+    const name = prompt('Enter new name for this website:');
+    if (name) {
+      const newSites = sites.map(s => s.id === id ? { ...s, name } : s);
+      setSites(newSites);
+      saveAppData(newSites, currentSiteId);
+    }
+  };
+
+  const shareSite = (id: string) => {
+    const site = sites.find(s => s.id === id);
+    if (!site) return;
+
+    // First save to server to ensure the link works for others
+    fetch('/api/sites', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(site)
+    }).then(() => {
+      const shareUrl = `${window.location.origin}${window.location.pathname}?s=${id}`;
+      navigator.clipboard.writeText(shareUrl).then(() => {
+        alert('Site synced to server and share link copied to clipboard!');
+      });
+    }).catch(err => {
+      console.error("Failed to sync for sharing", err);
+      // Fallback to local link
+      const shareUrl = `${window.location.origin}${window.location.pathname}?s=${id}`;
+      navigator.clipboard.writeText(shareUrl).then(() => {
+        alert('Share link copied to clipboard (Sync failed, might not work for others).');
+      });
+    });
+  };
+
+  const saveAppData = (newSites: BlogSite[], siteId: string) => {
+    const appData: AppData = {
+      sites: newSites,
+      currentSiteId: siteId
+    };
+    localStorage.setItem('zandel_blog_app_data', JSON.stringify(appData));
+  };
 
   // Admin Actions
   const handleAdminToggle = () => {
@@ -295,6 +534,10 @@ export default function App() {
   const handleFileUpload = (e: ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
     if (file) {
+      if (file.size > 2 * 1024 * 1024) {
+        alert('Background image is too large! Please use a file under 2MB.');
+        return;
+      }
       const reader = new FileReader();
       reader.onprogress = (ev) => {
         if (ev.lengthComputable) setUploadProgress(Math.round((ev.loaded / ev.total) * 100));
@@ -351,6 +594,11 @@ export default function App() {
             isAdmin ? "bg-accent text-white" : "bg-accent text-white"
           )}
         >
+          {isStorageFull && (
+            <div className="absolute -top-1 -right-1 w-4 h-4 bg-red-500 rounded-full border-2 border-white flex items-center justify-center animate-pulse">
+              <span className="text-[8px] font-bold text-white">!</span>
+            </div>
+          )}
           {isAdmin ? <Settings2 size={20} /> : <Pencil size={20} />}
         </button>
       </header>
@@ -552,9 +800,112 @@ export default function App() {
       </div>
 
       {/* Footer */}
-      <footer className="footer flex justify-center items-center px-10 py-8 bg-white border-t border-slate-100">
+      <footer className="footer flex flex-col justify-center items-center px-10 py-8 bg-white border-t border-slate-100 gap-4">
         <div className="font-semibold text-sm text-slate-500">{theme.footerText}</div>
+        <button 
+          onClick={() => setShowDashboardLogin(true)}
+          className="p-2 text-slate-300 hover:text-accent transition-colors"
+        >
+          <Lock size={18} />
+        </button>
       </footer>
+
+      {/* Site Dashboard Login */}
+      <AnimatePresence>
+        {showDashboardLogin && (
+          <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }} className="fixed inset-0 z-[110] flex items-center justify-center bg-ink/60 backdrop-blur-md p-4">
+            <motion.div initial={{ scale: 0.9, y: 20 }} animate={{ scale: 1, y: 0 }} className="bg-white p-10 rounded-[40px] shadow-2xl max-w-sm w-full text-center">
+              <div className="w-16 h-16 bg-accent/10 text-accent rounded-full flex items-center justify-center mx-auto mb-6"><Lock /></div>
+              <h2 className="text-2xl font-extrabold mb-4 text-ink">Site Dashboard</h2>
+              <p className="text-sm text-slate-400 mb-8">Enter the password to manage your duplicate websites.</p>
+              <input 
+                type="password" placeholder="••••" 
+                value={dashboardPassword} 
+                onChange={e => setDashboardPassword(e.target.value)} 
+                onKeyDown={e => e.key === 'Enter' && handleDashboardLogin()}
+                className="w-full p-4 bg-slate-50 rounded-2xl border border-slate-100 outline-none focus:border-accent text-center text-xl tracking-widest mb-6"
+              />
+              <div className="flex gap-3">
+                 <button onClick={() => setShowDashboardLogin(false)} className="flex-1 py-4 bg-slate-100 text-slate-600 rounded-2xl font-bold hover:bg-slate-200 transition-colors">Cancel</button>
+                 <button onClick={handleDashboardLogin} className="flex-1 py-4 bg-accent text-white rounded-2xl font-bold shadow-lg shadow-accent/20 hover:scale-105 active:scale-95 transition-all">Unlock</button>
+              </div>
+            </motion.div>
+          </motion.div>
+        )}
+      </AnimatePresence>
+
+      {/* Site Dashboard Modal */}
+      <AnimatePresence>
+        {showDashboard && (
+          <motion.div 
+            initial={{ opacity: 0 }} 
+            animate={{ opacity: 1 }} 
+            exit={{ opacity: 0 }} 
+            className="fixed inset-0 z-[110] bg-ink/40 backdrop-blur-xl p-4 md:p-10 flex flex-col items-center justify-center"
+          >
+            <motion.div 
+              initial={{ scale: 0.95, y: 40 }} 
+              animate={{ scale: 1, y: 0 }} 
+              className="bg-white rounded-[40px] shadow-2xl w-full max-w-4xl overflow-hidden flex flex-col max-h-[90vh]"
+            >
+              {/* Header */}
+              <div className="p-8 border-b border-slate-100 flex items-center justify-between bg-white">
+                <div className="flex items-center gap-4">
+                  <div className="w-12 h-12 bg-secondary/10 rounded-2xl flex items-center justify-center text-secondary">
+                    <Globe size={24} />
+                  </div>
+                  <div>
+                    <h2 className="text-2xl font-extrabold text-ink">My Websites</h2>
+                    <p className="text-xs text-slate-400 font-bold uppercase tracking-widest">Manage your duplicate projects</p>
+                  </div>
+                </div>
+                <div className="flex items-center gap-3">
+                  <button onClick={createNewSite} className="px-6 py-3 bg-accent text-white rounded-2xl font-bold flex items-center gap-2 hover:scale-105 transition-all"><Plus size={18} /> New Site</button>
+                  <button onClick={() => setShowDashboard(false)} className="p-3 bg-slate-100 rounded-2xl text-slate-400 hover:text-red-500 transition-colors"><X size={20} /></button>
+                </div>
+              </div>
+
+              {/* List */}
+              <div className="flex-1 overflow-auto p-8 grid grid-cols-1 md:grid-cols-2 gap-6">
+                {sites.map(site => (
+                  <div key={site.id} className={cn(
+                    "group relative p-6 rounded-[32px] border-2 transition-all hover:shadow-xl",
+                    currentSiteId === site.id ? "border-accent bg-accent/5" : "border-slate-50 bg-slate-50/50 hover:bg-white hover:border-slate-200"
+                  )}>
+                    <div className="flex justify-between items-start mb-4">
+                      <div className="w-10 h-10 bg-white rounded-xl shadow-sm flex items-center justify-center text-slate-400 group-hover:text-ink transition-colors">
+                        <Layout size={20} />
+                      </div>
+                      <div className="flex gap-1">
+                        <button onClick={() => shareSite(site.id)} className="p-2 hover:bg-white rounded-lg text-slate-400 hover:text-secondary transition-colors" title="Share Link"><LinkIcon size={16} /></button>
+                        <button onClick={() => renameSite(site.id)} className="p-2 hover:bg-white rounded-lg text-slate-400 hover:text-accent transition-colors" title="Rename"><Pencil size={16} /></button>
+                        <button onClick={() => duplicateSite(site)} className="p-2 hover:bg-white rounded-lg text-slate-400 hover:text-secondary transition-colors" title="Duplicate"><Copy size={16} /></button>
+                        <button onClick={() => deleteSite(site.id)} className="p-2 hover:bg-white rounded-lg text-slate-400 hover:text-red-500 transition-colors" title="Delete"><Trash2 size={16} /></button>
+                      </div>
+                    </div>
+                    <h3 className="font-extrabold text-ink text-lg mb-1">{site.name}</h3>
+                    <div className="flex items-center gap-2 text-slate-400 text-[10px] font-bold uppercase tracking-wider mb-6">
+                      <Calendar size={12} /> Last updated {new Date(site.updatedAt).toLocaleDateString()}
+                    </div>
+                    <button 
+                      onClick={() => switchSite(site.id)}
+                      disabled={currentSiteId === site.id}
+                      className={cn(
+                        "w-full py-3 rounded-2xl font-bold text-sm transition-all flex items-center justify-center gap-2",
+                        currentSiteId === site.id 
+                          ? "bg-emerald-50 text-emerald-600 border border-emerald-100 cursor-default" 
+                          : "bg-white border border-slate-200 text-ink shadow-sm hover:shadow-md active:scale-95"
+                      )}
+                    >
+                      {currentSiteId === site.id ? "Currently Active" : <>Open Site <ExternalLink size={14} /></>}
+                    </button>
+                  </div>
+                ))}
+              </div>
+            </motion.div>
+          </motion.div>
+        )}
+      </AnimatePresence>
 
       {/* Admin Panel Modal (Complex Edition) */}
       <AnimatePresence>
@@ -582,6 +933,11 @@ export default function App() {
                   </div>
                 </div>
                 <div className="flex items-center gap-4">
+                  {isStorageFull && (
+                    <div className="bg-red-500 text-white text-[10px] font-black px-3 py-1 rounded-full animate-pulse">
+                      STORAGE FULL
+                    </div>
+                  )}
                   <button 
                     onClick={saveData}
                     className="px-8 py-3 bg-secondary text-white rounded-2xl font-bold shadow-lg shadow-secondary/20 hover:scale-105 active:scale-95 transition-all flex items-center gap-2"
@@ -693,7 +1049,7 @@ export default function App() {
                                )}
                                <div>
                                  <label className="text-[10px] font-bold text-slate-400 uppercase tracking-widest block mb-2">
-                                   {item.type === 'text' ? 'Text Content' : 'URL Source'}
+                                   {item.type === 'text' ? 'Text Content' : (item.type === 'video' ? 'YouTube Link' : 'URL Source')}
                                  </label>
                                  <div className="flex flex-col gap-2">
                                      {item.type === 'text' ? (
@@ -708,32 +1064,39 @@ export default function App() {
                                           className="flex-1 p-3 bg-slate-50 rounded-xl border border-slate-100 outline-none focus:border-accent text-sm"
                                           value={item.content || ''}
                                           onChange={e => updateSection(item.id, { content: e.target.value })}
+                                          placeholder={item.type === 'video' ? "Paste YouTube link here..." : "Image URL..."}
                                         />
-                                        <label className="p-3 bg-white border border-slate-100 rounded-xl shadow-sm cursor-pointer hover:bg-slate-50 transition-colors relative h-12 w-12 flex items-center justify-center overflow-hidden">
-                                           {uploadProgress !== null && editingItemId === item.id && (
-                                              <div className="absolute inset-0 bg-secondary/90 flex items-center justify-center text-[10px] text-white font-black z-20">
-                                                {uploadProgress}%
-                                              </div>
-                                           )}
-                                           <Upload size={18} className="text-slate-400" />
-                                           <input 
-                                             type="file" 
-                                             className="hidden" 
-                                             accept={item.type === 'image' ? "image/*" : "video/*"}
-                                             onChange={(e) => {
-                                               const file = e.target.files?.[0];
-                                               if (file) {
-                                                 const reader = new FileReader();
-                                                 reader.onprogress = (ev) => { if (ev.lengthComputable) setUploadProgress(Math.round((ev.loaded / ev.total) * 100)); };
-                                                 reader.onload = (re) => {
-                                                   updateSection(item.id, { content: re.target?.result as string });
-                                                   setUploadProgress(null);
-                                                 };
-                                                 reader.readAsDataURL(file);
-                                               }
-                                             }}
-                                           />
-                                         </label>
+                                        {item.type === 'image' && (
+                                          <label className="p-3 bg-white border border-slate-100 rounded-xl shadow-sm cursor-pointer hover:bg-slate-50 transition-colors relative h-12 w-12 flex items-center justify-center overflow-hidden">
+                                             {uploadProgress !== null && editingItemId === item.id && (
+                                                <div className="absolute inset-0 bg-secondary/90 flex items-center justify-center text-[10px] text-white font-black z-20">
+                                                  {uploadProgress}%
+                                                </div>
+                                             )}
+                                             <Upload size={18} className="text-slate-400" />
+                                             <input 
+                                               type="file" 
+                                               className="hidden" 
+                                               accept="image/*"
+                                               onChange={(e) => {
+                                                 const file = e.target.files?.[0];
+                                                 if (file) {
+                                                   if (file.size > 1024 * 1024) {
+                                                     alert('File too large! Please upload images under 1MB.');
+                                                     return;
+                                                   }
+                                                   const reader = new FileReader();
+                                                   reader.onprogress = (ev) => { if (ev.lengthComputable) setUploadProgress(Math.round((ev.loaded / ev.total) * 100)); };
+                                                   reader.onload = (re) => {
+                                                     updateSection(item.id, { content: re.target?.result as string });
+                                                     setUploadProgress(null);
+                                                   };
+                                                   reader.readAsDataURL(file);
+                                                 }
+                                               }}
+                                             />
+                                           </label>
+                                        )}
                                       </div>
                                     )}
                                  </div>
@@ -817,9 +1180,24 @@ export default function App() {
                     ))}
                   </div>
                   
-                  {/* Additional Settings */}
+                  {/* Storage Indicator */}
                   <div className="mt-10 p-6 bg-white rounded-3xl border border-slate-100 shadow-sm">
-                    <p className="text-[10px] text-slate-400 italic font-medium">Tip: Use web URLs for large videos instead of uploading directly to ensure optimal performance.</p>
+                    <div className="flex justify-between items-center mb-2">
+                       <span className="text-[10px] font-black text-slate-400 uppercase tracking-widest">Storage Status (5MB Limit)</span>
+                       <span className={cn("text-xs font-bold", parseFloat(getStorageUsage()) > 90 ? "text-red-500" : "text-slate-600")}>{getStorageUsage()}% Used</span>
+                    </div>
+                    <div className="h-2 w-full bg-slate-100 rounded-full overflow-hidden">
+                       <motion.div 
+                         initial={{ width: 0 }}
+                         animate={{ width: `${getStorageUsage()}%` }}
+                         className={cn(
+                           "h-full transition-all duration-500",
+                           parseFloat(getStorageUsage()) > 90 ? "bg-red-500" : 
+                           parseFloat(getStorageUsage()) > 70 ? "bg-amber-500" : "bg-emerald-500"
+                         )}
+                       />
+                    </div>
+                    <p className="mt-2 text-[10px] text-slate-400 italic font-medium">Tip: Use web URLs for large videos and images instead of uploading directly.</p>
                   </div>
                 </div>
 
