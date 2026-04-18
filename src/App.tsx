@@ -208,57 +208,64 @@ export default function App() {
       const urlParams = new URLSearchParams(window.location.search);
       const siteIdFromUrl = urlParams.get('s');
 
-      // Try to load from server first
-      let serverSites: BlogSite[] = [];
+      // 1. Initial local load for speed
+      const savedAppData = localStorage.getItem('zandel_blog_app_data');
+      let localAppData: AppData = savedAppData ? JSON.parse(savedAppData) : { sites: [], currentSiteId: 'default' };
+      
+      // 2. Try to load fresh data from server
+      let mergedSites: BlogSite[] = [...localAppData.sites];
       try {
         const response = await fetch('/api/sites');
         if (response.ok) {
-          serverSites = await response.json();
+          const serverSites: BlogSite[] = await response.json();
+          const mergedMap = new Map();
+          // Local first, then server overwrites with most recent
+          localAppData.sites.forEach(s => mergedMap.set(s.id, s));
+          serverSites.forEach(s => mergedMap.set(s.id, s));
+          mergedSites = Array.from(mergedMap.values());
         }
       } catch (e) {
-        console.error("Failed to load sites from server", e);
+        console.warn("Server sync unavailable, using local data", e);
       }
 
-      const savedAppData = localStorage.getItem('zandel_blog_app_data');
-      let localAppData: AppData = savedAppData ? JSON.parse(savedAppData) : { sites: [], currentSiteId: 'default' };
-
-      // Merge local and server sites, server takes priority if site exists on both
-      const mergedSitesMap = new Map();
-      localAppData.sites.forEach(s => mergedSitesMap.set(s.id, s));
-      serverSites.forEach(s => mergedSitesMap.set(s.id, s));
-      const mergedSites = Array.from(mergedSitesMap.values());
-
-      // If no sites exist yet, create the default one
+      // 3. Fallback for new users
       if (mergedSites.length === 0) {
-        const defaultSite: BlogSite = {
+        mergedSites = [{
           id: 'default',
           name: 'Website 1',
           blogData: DEFAULT_BLOG_DATA,
           theme: DEFAULT_THEME,
           socials: DEFAULT_SOCIALS,
           updatedAt: Date.now()
-        };
-        mergedSites.push(defaultSite);
+        }];
       }
 
       setSites(mergedSites);
 
+      // 4. Determine which site to display
       const targetId = siteIdFromUrl || localAppData.currentSiteId || 'default';
+      
+      // CRITICAL: Always prioritize server version if viewing a shared link
       let activeSite = mergedSites.find(s => s.id === targetId);
 
-      // If viewing a shared site that isn't in our local list, fetch it specifically
-      if (!activeSite && siteIdFromUrl) {
+      if (siteIdFromUrl) {
         try {
           const res = await fetch(`/api/sites/${siteIdFromUrl}`);
           if (res.ok) {
-            activeSite = await res.json();
+            const freshSite = await res.json();
+            activeSite = freshSite;
+            // Update the local list with this fresh version
+            setSites(prev => {
+              const map = new Map(prev.map(s => [s.id, s]));
+              map.set(freshSite.id, freshSite);
+              return Array.from(map.values());
+            });
           }
         } catch (e) {
-          console.error("Failed to fetch specific site", e);
+          console.error("Failed to fetch fresh shared site", e);
         }
       }
 
-      // Final fallback
       if (!activeSite) activeSite = mergedSites[0];
 
       if (activeSite) {
@@ -951,6 +958,13 @@ export default function App() {
                       STORAGE FULL
                     </div>
                   )}
+                  <button 
+                    onClick={() => shareSite(currentSiteId)}
+                    className="p-3 bg-slate-100 text-slate-400 hover:text-secondary rounded-full transition-colors"
+                    title="Get Share Link"
+                  >
+                    <LinkIcon size={20} />
+                  </button>
                   <button 
                     onClick={saveData}
                     className="px-8 py-3 bg-secondary text-white rounded-2xl font-bold shadow-lg shadow-secondary/20 hover:scale-105 active:scale-95 transition-all flex items-center gap-2"
