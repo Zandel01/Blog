@@ -225,6 +225,8 @@ export default function App() {
   const [showDashboard, setShowDashboard] = useState(false);
   const [showDashboardLogin, setShowDashboardLogin] = useState(false);
   const [dashboardPassword, setDashboardPassword] = useState('');
+  const [sharingId, setSharingId] = useState<string | null>(null);
+  const [isLoading, setIsLoading] = useState(true);
 
   const sensors = useSensors(
     useSensor(PointerSensor, { activationConstraint: { distance: 8 } }),
@@ -249,30 +251,34 @@ export default function App() {
         localAppData = { sites: [], currentSiteId: 'default' };
       }
       
-      // 2. Try to load fresh data from Firebase Cloud
+      // 2. Try to load fresh data from Firebase Cloud (if not just a viewer)
       let mergedSites: BlogSite[] = Array.isArray(localAppData.sites) ? [...localAppData.sites] : [];
-      try {
-        const querySnapshot = await getDocs(collection(db, 'sites'));
-        const serverSites: BlogSite[] = [];
-        querySnapshot.forEach((doc) => {
-          serverSites.push(doc.data() as BlogSite);
-        });
+      
+      // If we are an admin or have a local site list, try to sync the whole list
+      // Otherwise, we'll just fetch the specific site requested in the next step
+      if (!siteIdFromUrl || isAdmin) {
+        try {
+          const querySnapshot = await getDocs(collection(db, 'sites'));
+          const serverSites: BlogSite[] = [];
+          querySnapshot.forEach((doc) => {
+            serverSites.push(doc.data() as BlogSite);
+          });
 
-        if (serverSites.length > 0) {
-          const mergedMap = new Map();
-          // Local first, then server overwrites with most recent
-          if (Array.isArray(localAppData.sites)) {
-            localAppData.sites.forEach(s => {
+          if (serverSites.length > 0) {
+            const mergedMap = new Map();
+            if (Array.isArray(localAppData.sites)) {
+              localAppData.sites.forEach(s => {
+                if (s && s.id) mergedMap.set(s.id, s);
+              });
+            }
+            serverSites.forEach(s => {
               if (s && s.id) mergedMap.set(s.id, s);
             });
+            mergedSites = Array.from(mergedMap.values());
           }
-          serverSites.forEach(s => {
-            if (s && s.id) mergedMap.set(s.id, s);
-          });
-          mergedSites = Array.from(mergedMap.values());
+        } catch (e) {
+          console.warn("Full cloud sync restricted or unavailable", e);
         }
-      } catch (e) {
-        console.warn("Cloud sync unavailable, using local data", e);
       }
 
       // 3. Fallback for new users
@@ -329,7 +335,9 @@ export default function App() {
       }
     };
 
-    loadAppData();
+    loadAppData().finally(() => {
+      setIsLoading(false);
+    });
   }, []);
 
   // Save Data
@@ -451,7 +459,7 @@ export default function App() {
   };
 
   const createNewSite = () => {
-    const newId = Date.now().toString();
+    const newId = 'site-' + Math.random().toString(36).substring(2, 11);
     const sitesSource = Array.isArray(sites) ? sites : [];
     const newSite: BlogSite = {
       id: newId,
@@ -467,7 +475,7 @@ export default function App() {
   };
 
   const duplicateSite = (site: BlogSite) => {
-    const newId = Date.now().toString();
+    const newId = 'site-' + Math.random().toString(36).substring(2, 11);
     const sitesSource = Array.isArray(sites) ? sites : [];
     const newSite: BlogSite = {
       ...site,
@@ -530,20 +538,31 @@ export default function App() {
     const site = Array.isArray(sites) ? sites.find(s => s.id === id) : null;
     if (!site) return;
 
+    setSharingId(id);
+    
     // First save to cloud to ensure the link works for others immediately
     // This is essentially a "publish" action
-    setDoc(doc(db, 'sites', id), site).then(() => {
-      const shareUrl = `${window.location.origin}${window.location.pathname}?s=${id}`;
-      navigator.clipboard.writeText(shareUrl).then(() => {
-        alert('Site published to cloud and share link copied! Anyone with this link will now see your latest updates.');
+    try {
+      const sanitizedSite = JSON.parse(safeJsonStringify(site));
+      setDoc(doc(db, 'sites', id), sanitizedSite).then(() => {
+        const shareUrl = `${window.location.origin}${window.location.pathname}?s=${id}`;
+        navigator.clipboard.writeText(shareUrl).then(() => {
+          alert('Site published to cloud and share link copied! Anyone with this link will now see your latest updates.');
+          setSharingId(null);
+        });
+      }).catch(err => {
+        console.error("Failed to sync to cloud for sharing", err);
+        const shareUrl = `${window.location.origin}${window.location.pathname}?s=${id}`;
+        navigator.clipboard.writeText(shareUrl).then(() => {
+          alert('Share link copied! (Cloud sync failed, updates might not show for others yet).');
+          setSharingId(null);
+        });
       });
-    }).catch(err => {
-      console.error("Failed to sync to cloud for sharing", err);
-      const shareUrl = `${window.location.origin}${window.location.pathname}?s=${id}`;
-      navigator.clipboard.writeText(shareUrl).then(() => {
-        alert('Share link copied! (Cloud sync failed, updates might not show for others yet).');
-      });
-    });
+    } catch (e) {
+      console.error("Serialization failed for sharing", e);
+      alert("Failed to prepare site for sharing. Please check for large images or unsupported content.");
+      setSharingId(null);
+    }
   };
 
   const saveAppData = (newSites: BlogSite[], siteId: string) => {
@@ -658,6 +677,15 @@ export default function App() {
   const profileUploadRef = useRef<HTMLInputElement>(null);
 
   const activeItem = Array.isArray(blogData) ? blogData.find(i => i.id === editingItemId) : null;
+
+  if (isLoading) {
+    return (
+      <div className="min-h-screen bg-[#FFFDF0] flex flex-col items-center justify-center">
+        <div className="w-16 h-16 border-4 border-accent border-t-transparent rounded-full animate-spin mb-4" />
+        <p className="text-accent font-bold animate-pulse">Loading Website...</p>
+      </div>
+    );
+  }
 
   return (
     <div 
@@ -985,7 +1013,17 @@ export default function App() {
                         <Layout size={20} />
                       </div>
                       <div className="flex gap-1">
-                        <button onClick={() => shareSite(site.id)} className="p-2 hover:bg-white rounded-lg text-slate-400 hover:text-secondary transition-colors" title="Share Link"><LinkIcon size={16} /></button>
+                        <button 
+                          onClick={() => shareSite(site.id)} 
+                          disabled={sharingId === site.id}
+                          className={cn(
+                            "p-2 hover:bg-white rounded-lg transition-colors",
+                            sharingId === site.id ? "text-amber-500 animate-pulse" : "text-slate-400 hover:text-secondary"
+                          )}
+                          title="Share Link"
+                        >
+                          {sharingId === site.id ? <Upload size={16} /> : <LinkIcon size={16} />}
+                        </button>
                         <button onClick={() => renameSite(site.id)} className="p-2 hover:bg-white rounded-lg text-slate-400 hover:text-accent transition-colors" title="Rename"><Pencil size={16} /></button>
                         <button onClick={() => duplicateSite(site)} className="p-2 hover:bg-white rounded-lg text-slate-400 hover:text-secondary transition-colors" title="Duplicate"><Copy size={16} /></button>
                         <button onClick={() => deleteSite(site.id)} className="p-2 hover:bg-white rounded-lg text-slate-400 hover:text-red-500 transition-colors" title="Delete"><Trash2 size={16} /></button>
