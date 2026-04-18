@@ -181,7 +181,6 @@ export default function App() {
   const [passwordInput, setPasswordInput] = useState('');
   const [editingItemId, setEditingItemId] = useState<string | null>(null);
   const [uploadProgress, setUploadProgress] = useState<number | null>(null);
-  const [isStorageFull, setIsStorageFull] = useState(false);
 
   const sensors = useSensors(
     useSensor(PointerSensor, { activationConstraint: { distance: 8 } }),
@@ -214,11 +213,9 @@ export default function App() {
       alert('All changes saved successfully!');
       setShowAdminModal(false);
       setIsAdmin(false);
-      setIsStorageFull(false);
     } catch (e) {
-      console.error(e);
-      setIsStorageFull(true);
-      alert('⚠️ STORAGE QUOTA EXCEEDED!\n\nYou have uploaded too many high-quality images or videos. Please delete some large sections or use external links (URLs) instead of uploading files directly.');
+      console.error('Storage error:', e);
+      alert('Error: Could not save all changes. You might have uploaded files that are too large for the browser memory.');
     }
   };
 
@@ -230,19 +227,12 @@ export default function App() {
         localStorage.setItem('zandel_blog_v3_data', JSON.stringify(blogData));
         localStorage.setItem('zandel_blog_v3_theme', JSON.stringify(theme));
         localStorage.setItem('zandel_blog_v3_socials', JSON.stringify(socials));
-        setIsStorageFull(false);
       } catch (e) {
-        setIsStorageFull(true);
+        console.error('Auto-save storage error:', e);
       }
     }, 2000);
     return () => clearTimeout(timer);
   }, [blogData, theme, socials]);
-
-  const getStorageUsage = () => {
-    const data = JSON.stringify(blogData) + JSON.stringify(theme) + JSON.stringify(socials);
-    const kbs = (data.length * 2) / 1024; // approx size in KB
-    return Math.min((kbs / 5120) * 100, 100).toFixed(1);
-  };
 
   // Admin Actions
   const handleAdminToggle = () => {
@@ -352,12 +342,7 @@ export default function App() {
       {/* Top Bar */}
       <header className="px-10 py-5 flex justify-between items-center bg-transparent z-[60]">
         <div className="font-extrabold text-2xl tracking-tighter">
-          {(theme.logoText || 'Z.R').split('.').map((part, i, arr) => (
-            <React.Fragment key={i}>
-              {part}
-              {i < arr.length - 1 && <span className="text-accent">.</span>}
-            </React.Fragment>
-          ))}
+          {theme.logoText || 'Z.R'}
         </div>
         <button 
           onClick={handleAdminToggle}
@@ -366,11 +351,6 @@ export default function App() {
             isAdmin ? "bg-accent text-white" : "bg-accent text-white"
           )}
         >
-          {isStorageFull && (
-            <div className="absolute -top-1 -right-1 w-4 h-4 bg-red-500 rounded-full border-2 border-white flex items-center justify-center animate-pulse">
-              <span className="text-[8px] font-bold text-white">!</span>
-            </div>
-          )}
           {isAdmin ? <Settings2 size={20} /> : <Pencil size={20} />}
         </button>
       </header>
@@ -602,11 +582,6 @@ export default function App() {
                   </div>
                 </div>
                 <div className="flex items-center gap-4">
-                  {isStorageFull && (
-                    <div className="bg-red-500 text-white text-[10px] font-black px-3 py-1 rounded-full animate-pulse">
-                      STORAGE FULL
-                    </div>
-                  )}
                   <button 
                     onClick={saveData}
                     className="px-8 py-3 bg-secondary text-white rounded-2xl font-bold shadow-lg shadow-secondary/20 hover:scale-105 active:scale-95 transition-all flex items-center gap-2"
@@ -842,24 +817,9 @@ export default function App() {
                     ))}
                   </div>
                   
-                  {/* Storage Indicator */}
+                  {/* Additional Settings */}
                   <div className="mt-10 p-6 bg-white rounded-3xl border border-slate-100 shadow-sm">
-                    <div className="flex justify-between items-center mb-2">
-                       <span className="text-[10px] font-black text-slate-400 uppercase tracking-widest">Storage Status (5MB Limit)</span>
-                       <span className={cn("text-xs font-bold", parseFloat(getStorageUsage()) > 90 ? "text-red-500" : "text-slate-600")}>{getStorageUsage()}% Used</span>
-                    </div>
-                    <div className="h-2 w-full bg-slate-100 rounded-full overflow-hidden">
-                       <motion.div 
-                         initial={{ width: 0 }}
-                         animate={{ width: `${getStorageUsage()}%` }}
-                         className={cn(
-                           "h-full transition-all duration-500",
-                           parseFloat(getStorageUsage()) > 90 ? "bg-red-500" : 
-                           parseFloat(getStorageUsage()) > 70 ? "bg-amber-500" : "bg-emerald-500"
-                         )}
-                       />
-                    </div>
-                    <p className="mt-2 text-[10px] text-slate-400 italic font-medium">Tip: Use web URLs for large videos instead of uploading directly.</p>
+                    <p className="text-[10px] text-slate-400 italic font-medium">Tip: Use web URLs for large videos instead of uploading directly to ensure optimal performance.</p>
                   </div>
                 </div>
 
