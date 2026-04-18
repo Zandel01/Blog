@@ -47,6 +47,7 @@ export interface BlogSite {
   theme: BlogTheme;
   socials: SocialLink[];
   updatedAt: number;
+  isActive?: boolean;
 }
 
 export interface AppData {
@@ -59,7 +60,7 @@ export const DEFAULT_THEME: BlogTheme = {
   profileImage: 'https://images.unsplash.com/photo-1535713875002-d1d0cf377fde?q=80&w=2080&auto=format&fit=crop',
   profileCoverImage: 'https://images.unsplash.com/photo-1516321497487-e288fb19713f?q=80&w=2070&auto=format&fit=crop',
   profileName: 'Zandel Ragay',
-  profileDesignation: 'group member',
+  profileDesignation: 'ragayzandel0@gmail.com',
   profileBio: 'Passionately exploring the intersections of electronics, pedagogy, and modern design within the BTVTED-ELEXT course.',
   fontFamily: 'font-sans',
   hue: 0,

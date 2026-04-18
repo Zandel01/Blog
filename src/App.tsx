@@ -61,7 +61,8 @@ import {
   getDoc, 
   getDocs, 
   setDoc, 
-  getDocFromServer
+  getDocFromServer,
+  deleteDoc
 } from 'firebase/firestore';
 import { db } from './firebase';
 import { cn } from './lib/utils';
@@ -227,6 +228,7 @@ export default function App() {
   const [dashboardPassword, setDashboardPassword] = useState('');
   const [sharingId, setSharingId] = useState<string | null>(null);
   const [isLoading, setIsLoading] = useState(true);
+  const [isOffline, setIsOffline] = useState(false);
 
   const sensors = useSensors(
     useSensor(PointerSensor, { activationConstraint: { distance: 8 } }),
@@ -332,6 +334,12 @@ export default function App() {
         setBlogData(activeSite.blogData);
         setTheme(activeSite.theme);
         setSocials(activeSite.socials);
+
+        if (activeSite.isActive === false) {
+          setIsOffline(true);
+        } else {
+          setIsOffline(false);
+        }
       }
     };
 
@@ -449,7 +457,7 @@ export default function App() {
 
   // Site Dashboard Actions
   const handleDashboardLogin = () => {
-    if (dashboardPassword === '1') {
+    if (dashboardPassword === 'GROWINGOLD9886') {
       setShowDashboardLogin(false);
       setShowDashboard(true);
       setDashboardPassword('');
@@ -488,7 +496,7 @@ export default function App() {
     saveAppData(newSites, currentSiteId);
   };
 
-  const deleteSite = (id: string) => {
+  const deleteSite = async (id: string) => {
     const sitesSource = Array.isArray(sites) ? sites : [];
     if (sitesSource.length <= 1) {
       alert("You must have at least one website.");
@@ -507,6 +515,32 @@ export default function App() {
         setSocials(nextSite.socials);
       }
       saveAppData(newSites, targetId);
+
+      // Delete from Firebase
+      try {
+        await deleteDoc(doc(db, 'sites', id));
+      } catch (err) {
+        console.error("Failed to delete from cloud", err);
+      }
+    }
+  };
+
+  const toggleSiteStatus = (id: string) => {
+    const newSites = sites.map(s => s.id === id ? { ...s, isActive: s.isActive === false } : s);
+    setSites(newSites);
+    saveAppData(newSites, currentSiteId);
+    
+    const site = newSites.find(s => s.id === id);
+    if (site && id === currentSiteId) {
+      setIsOffline(site.isActive === false);
+    }
+
+    // Sync to cloud
+    if (site) {
+       try {
+         const sanitizedSite = JSON.parse(safeJsonStringify(site));
+         setDoc(doc(db, 'sites', id), sanitizedSite);
+       } catch (e) {}
     }
   };
 
@@ -684,6 +718,70 @@ export default function App() {
         <div className="w-16 h-16 border-4 border-accent border-t-transparent rounded-full animate-spin mb-4" />
         <p className="text-accent font-bold animate-pulse">Loading Website...</p>
       </div>
+    );
+  }
+
+  // Offline Screen
+  if (isOffline && !isAdmin) {
+    return (
+       <div className="min-h-screen bg-slate-900 flex flex-col items-center justify-center text-center p-10 font-sans">
+          <div className="w-24 h-24 bg-white/10 rounded-[40px] flex items-center justify-center text-white mb-8 border border-white/20">
+             <Globe size={48} className="animate-pulse" />
+          </div>
+          <h1 className="text-4xl md:text-6xl font-black text-white mb-4 tracking-tighter uppercase">Website <span className="text-red-500">Offline</span></h1>
+          <p className="text-white/40 max-w-md mb-12 font-medium">The owner has temporarily deactivated this website. Please check back later or contact the administrator.</p>
+          
+          <div className="flex flex-col gap-4 items-center">
+             <button 
+               onClick={() => window.location.reload()}
+               className="px-10 py-4 bg-white text-slate-900 rounded-2xl font-bold hover:scale-105 transition-all shadow-xl"
+             >
+               Refresh Page
+             </button>
+             
+             <button 
+                onClick={() => setShowAdminModal(true)}
+                className="text-white/20 hover:text-white/60 text-xs font-bold uppercase tracking-widest transition-colors flex items-center gap-2 mt-4"
+             >
+                <Lock size={12} /> Management Login
+             </button>
+          </div>
+
+          <AnimatePresence>
+            {showAdminModal && (
+              <motion.div 
+                initial={{ opacity: 0 }}
+                animate={{ opacity: 1 }}
+                exit={{ opacity: 0 }}
+                className="fixed inset-0 z-[200] flex items-center justify-center bg-black/80 backdrop-blur-md p-6"
+              >
+                <div className="bg-white p-10 rounded-[40px] w-full max-w-md relative shadow-2xl text-left">
+                  <button onClick={() => setShowAdminModal(false)} className="absolute top-6 right-6 p-2 hover:bg-slate-100 rounded-full transition-colors"><X size={20} /></button>
+                  <div className="w-16 h-16 bg-accent/10 rounded-3xl flex items-center justify-center text-accent mb-6">
+                    <Lock size={28} />
+                  </div>
+                  <h2 className="text-3xl font-black text-ink mb-2">Admin Login</h2>
+                  <p className="text-slate-400 text-sm font-bold uppercase tracking-widest mb-8">Access management center</p>
+                  
+                  <input 
+                    type="password" 
+                    placeholder="Enter management password..."
+                    className="w-full h-16 bg-slate-100 rounded-2xl px-6 font-bold text-ink mb-4 focus:ring-4 focus:ring-accent/10 transition-all outline-none"
+                    value={passwordInput}
+                    onChange={(e) => setPasswordInput(e.target.value)}
+                    onKeyDown={(e) => e.key === 'Enter' && handleLogin()}
+                  />
+                  <button 
+                    onClick={handleLogin}
+                    className="w-full h-16 bg-accent text-white rounded-2xl font-bold shadow-xl shadow-accent/20 hover:scale-[1.02] active:scale-[0.98] transition-all"
+                  >
+                    Enter Management Center
+                  </button>
+                </div>
+              </motion.div>
+            )}
+          </AnimatePresence>
+       </div>
     );
   }
 
@@ -992,7 +1090,9 @@ export default function App() {
                   </div>
                   <div>
                     <h2 className="text-2xl font-extrabold text-ink">My Websites</h2>
-                    <p className="text-xs text-slate-400 font-bold uppercase tracking-widest">Manage your duplicate projects</p>
+                    <p className="text-xs text-slate-400 font-bold uppercase tracking-widest">
+                      Manage your projects • <span className="text-accent">{Array.isArray(sites) ? sites.length : 0} Sites Running</span>
+                    </p>
                   </div>
                 </div>
                 <div className="flex items-center gap-3">
@@ -1013,6 +1113,16 @@ export default function App() {
                         <Layout size={20} />
                       </div>
                       <div className="flex gap-1">
+                        <button 
+                          onClick={() => toggleSiteStatus(site.id)}
+                          className={cn(
+                            "p-2 hover:bg-white rounded-lg transition-colors",
+                            site.isActive === false ? "text-red-500" : "text-emerald-500"
+                          )}
+                          title={site.isActive === false ? "Activate Site (Go Online)" : "Deactivate Site (Go Offline)"}
+                        >
+                          {site.isActive === false ? <EyeOff size={16} /> : <Eye size={16} />}
+                        </button>
                         <button 
                           onClick={() => shareSite(site.id)} 
                           disabled={sharingId === site.id}
