@@ -227,6 +227,7 @@ export default function App() {
   const [showDashboardLogin, setShowDashboardLogin] = useState(false);
   const [dashboardPassword, setDashboardPassword] = useState('');
   const [sharingId, setSharingId] = useState<string | null>(null);
+  const [deletingId, setDeletingId] = useState<string | null>(null);
   const [isLoading, setIsLoading] = useState(true);
   const [isOffline, setIsOffline] = useState(false);
 
@@ -457,7 +458,7 @@ export default function App() {
 
   // Site Dashboard Actions
   const handleDashboardLogin = () => {
-    if (dashboardPassword === 'GROWINGOLD9886') {
+    if (dashboardPassword === 'GROWINGOLD9886WITHMYFAMILY') {
       setShowDashboardLogin(false);
       setShowDashboard(true);
       setDashboardPassword('');
@@ -502,25 +503,38 @@ export default function App() {
       alert("You must have at least one website.");
       return;
     }
-    if (confirm('Delete this website permanently?')) {
-      const newSites = sitesSource.filter(s => s.id !== id);
-      setSites(newSites);
-      const targetId = currentSiteId === id && newSites.length > 0 ? newSites[0].id : currentSiteId;
-      
-      if (currentSiteId === id && newSites.length > 0) {
-        const nextSite = newSites[0];
-        setCurrentSiteId(nextSite.id);
-        setBlogData(nextSite.blogData);
-        setTheme(nextSite.theme);
-        setSocials(nextSite.socials);
-      }
-      saveAppData(newSites, targetId);
-
-      // Delete from Firebase
+    if (confirm('Delete this website permanently from both local storage and cloud?')) {
+      setDeletingId(id);
       try {
+        // 1. Delete from Firebase
         await deleteDoc(doc(db, 'sites', id));
+        
+        // 2. Update local state
+        const newSites = sitesSource.filter(s => s.id !== id);
+        setSites(newSites);
+        
+        const isDeletingCurrent = currentSiteId === id;
+        const targetId = isDeletingCurrent && newSites.length > 0 ? newSites[0].id : currentSiteId;
+        
+        if (isDeletingCurrent && newSites.length > 0) {
+          const nextSite = newSites[0];
+          setCurrentSiteId(nextSite.id);
+          setBlogData(nextSite.blogData);
+          setTheme(nextSite.theme);
+          setSocials(nextSite.socials);
+        }
+        
+        // 3. Save to local storage
+        saveAppData(newSites, targetId);
       } catch (err) {
         console.error("Failed to delete from cloud", err);
+        // Even if cloud fails, we should update local state so the user doesn't see it
+        const newSites = sitesSource.filter(s => s.id !== id);
+        setSites(newSites);
+        saveAppData(newSites, currentSiteId === id && newSites.length > 0 ? newSites[0].id : currentSiteId);
+        alert('Removed locally, but failed to delete from cloud. It might still be viewable via direct link.');
+      } finally {
+        setDeletingId(null);
       }
     }
   };
@@ -1136,7 +1150,17 @@ export default function App() {
                         </button>
                         <button onClick={() => renameSite(site.id)} className="p-2 hover:bg-white rounded-lg text-slate-400 hover:text-accent transition-colors" title="Rename"><Pencil size={16} /></button>
                         <button onClick={() => duplicateSite(site)} className="p-2 hover:bg-white rounded-lg text-slate-400 hover:text-secondary transition-colors" title="Duplicate"><Copy size={16} /></button>
-                        <button onClick={() => deleteSite(site.id)} className="p-2 hover:bg-white rounded-lg text-slate-400 hover:text-red-500 transition-colors" title="Delete"><Trash2 size={16} /></button>
+                        <button 
+                          onClick={() => deleteSite(site.id)} 
+                          disabled={deletingId === site.id}
+                          className={cn(
+                            "p-2 hover:bg-white rounded-lg transition-colors",
+                            deletingId === site.id ? "text-red-300 animate-spin" : "text-slate-400 hover:text-red-500"
+                          )} 
+                          title="Delete"
+                        >
+                          <Trash2 size={16} />
+                        </button>
                       </div>
                     </div>
                     <h3 className="font-extrabold text-ink text-lg mb-1">{site.name}</h3>
