@@ -324,7 +324,7 @@ export default function App() {
   // Auto-save logic
   useEffect(() => {
     if (blogData.length === 0) return;
-    const timer = setTimeout(() => {
+    const timer = setTimeout(async () => {
       try {
         const updatedSite: BlogSite = {
           id: currentSiteId,
@@ -341,14 +341,27 @@ export default function App() {
           currentSiteId
         };
 
+        // Local background save
         localStorage.setItem('zandel_blog_app_data', JSON.stringify(appData));
         setSites(newSites);
+
+        // Server background sync (only if we're essentially the "owner" or editing)
+        // We use a simple fetch since it's an auto-sync
+        try {
+          await fetch('/api/sites', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(updatedSite)
+          });
+        } catch (err) {
+          console.warn("Silent sync failed", err);
+        }
 
         setIsStorageFull(false);
       } catch (e) {
         setIsStorageFull(true);
       }
-    }, 2000);
+    }, 3000); // 3 seconds debounce for auto-sync
     return () => clearTimeout(timer);
   }, [blogData, theme, socials, currentSiteId]);
 
@@ -445,7 +458,8 @@ export default function App() {
     const site = sites.find(s => s.id === id);
     if (!site) return;
 
-    // First save to server to ensure the link works for others
+    // First save to server to ensure the link works for others immediately
+    // This is essentially a "publish" action
     fetch('/api/sites', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
@@ -453,14 +467,13 @@ export default function App() {
     }).then(() => {
       const shareUrl = `${window.location.origin}${window.location.pathname}?s=${id}`;
       navigator.clipboard.writeText(shareUrl).then(() => {
-        alert('Site synced to server and share link copied to clipboard!');
+        alert('Site published and share link copied! Anyone with this link will now see your latest updates.');
       });
     }).catch(err => {
       console.error("Failed to sync for sharing", err);
-      // Fallback to local link
       const shareUrl = `${window.location.origin}${window.location.pathname}?s=${id}`;
       navigator.clipboard.writeText(shareUrl).then(() => {
-        alert('Share link copied to clipboard (Sync failed, might not work for others).');
+        alert('Share link copied! (Server sync failed, updates might not show for others yet).');
       });
     });
   };
