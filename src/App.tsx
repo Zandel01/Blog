@@ -88,6 +88,22 @@ const PLATFORM_ICONS = {
   github: Github
 };
 
+// --- Serialization Safety ---
+const safeJsonStringify = (obj: any) => {
+  const cache = new WeakSet();
+  return JSON.stringify(obj, (key, value) => {
+    if (typeof value === 'object' && value !== null) {
+      if (cache.has(value)) return;
+      cache.add(value);
+    }
+    // Safety check for DOM elements which can cause circularity in React env
+    if (value && (value instanceof HTMLElement || value.nodeName || value.nodeType)) {
+      return undefined;
+    }
+    return value;
+  });
+};
+
 // --- Sortable Item Component ---
 
 // --- Scroll Animation Variants ---
@@ -335,13 +351,15 @@ export default function App() {
       };
 
       // Save to local storage
-      localStorage.setItem('zandel_blog_app_data', JSON.stringify(appData));
+      localStorage.setItem('zandel_blog_app_data', safeJsonStringify(appData));
       setSites(newSites);
       
       // Save to cloud for sharing
       try {
         setSyncStatus('syncing');
-        await setDoc(doc(db, 'sites', currentSiteId), updatedSite);
+        // Ensure only clean data goes to Firebase
+        const sanitizedUpdate = JSON.parse(safeJsonStringify(updatedSite));
+        await setDoc(doc(db, 'sites', currentSiteId), sanitizedUpdate);
         setSyncStatus('saved');
       } catch (e) {
         console.warn("Failed to sync to cloud", e);
@@ -349,9 +367,9 @@ export default function App() {
       }
 
       // Legacy support for backward compatibility
-      localStorage.setItem('zandel_blog_v3_data', JSON.stringify(blogData));
-      localStorage.setItem('zandel_blog_v3_theme', JSON.stringify(theme));
-      localStorage.setItem('zandel_blog_v3_socials', JSON.stringify(socials));
+      localStorage.setItem('zandel_blog_v3_data', safeJsonStringify(blogData));
+      localStorage.setItem('zandel_blog_v3_theme', safeJsonStringify(theme));
+      localStorage.setItem('zandel_blog_v3_socials', safeJsonStringify(socials));
 
       alert('All changes saved and synced for sharing!');
       setShowAdminModal(false);
@@ -386,14 +404,15 @@ export default function App() {
         };
 
         // 1. Local Persistence
-        localStorage.setItem('zandel_blog_app_data', JSON.stringify(appData));
+        localStorage.setItem('zandel_blog_app_data', safeJsonStringify(appData));
         setSites(newSites);
 
         // 2. Global Cloud Sync (ONLY IF ADMIN/EDITOR)
         if (isAdmin) {
           setSyncStatus('syncing');
           try {
-            await setDoc(doc(db, 'sites', currentSiteId), updatedSite);
+            const sanitizedUpdate = JSON.parse(safeJsonStringify(updatedSite));
+            await setDoc(doc(db, 'sites', currentSiteId), sanitizedUpdate);
             setSyncStatus('saved');
           } catch (err) {
             console.warn("Silent cloud sync failed", err);
@@ -410,10 +429,14 @@ export default function App() {
   }, [blogData, theme, socials, currentSiteId, isAdmin]);
 
   const getStorageUsage = () => {
-    const data = JSON.stringify(blogData) + JSON.stringify(theme) + JSON.stringify(socials);
-    const kbs = (data.length * 2) / 1024; // approx size in KB
-    // 5MB is roughly 5120KB
-    return Math.min((kbs / 5120) * 100, 100).toFixed(1);
+    try {
+      const data = safeJsonStringify(blogData) + safeJsonStringify(theme) + safeJsonStringify(socials);
+      const kbs = (data.length * 2) / 1024; // approx size in KB
+      // 5MB is roughly 5120KB
+      return Math.min((kbs / 5120) * 100, 100).toFixed(1);
+    } catch (e) {
+      return "0.0";
+    }
   };
 
   // Site Dashboard Actions
@@ -528,7 +551,7 @@ export default function App() {
       sites: newSites,
       currentSiteId: siteId
     };
-    localStorage.setItem('zandel_blog_app_data', JSON.stringify(appData));
+    localStorage.setItem('zandel_blog_app_data', safeJsonStringify(appData));
   };
 
   // Admin Actions
