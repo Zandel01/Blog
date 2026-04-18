@@ -270,6 +270,11 @@ export default function App() {
       if (!activeSite) activeSite = mergedSites[0];
 
       if (activeSite) {
+        // Migration/Update: Use new profile photo if still on old default
+        if (activeSite.theme.profileImage === 'input_file_0.png') {
+          activeSite.theme.profileImage = 'input_file_1.png';
+        }
+        
         setCurrentSiteId(activeSite.id);
         setBlogData(activeSite.blogData);
         setTheme(activeSite.theme);
@@ -591,6 +596,14 @@ export default function App() {
 
   const deleteSocial = (id: string) => {
     setSocials(socials.filter(s => s.id !== id));
+  };
+
+  const resetToDefault = () => {
+    if (confirm('Reset this blog to its default form? All custom sections and theme changes will be lost.')) {
+      setBlogData(DEFAULT_BLOG_DATA);
+      setTheme(DEFAULT_THEME);
+      setSocials(DEFAULT_SOCIALS);
+    }
   };
 
   const fileInputRef = useRef<HTMLInputElement>(null);
@@ -1019,6 +1032,7 @@ export default function App() {
                        <button onClick={() => addSection('text')} className="p-2 bg-white rounded-xl shadow-sm border border-slate-100 hover:border-accent transition-colors"><Type size={18} /></button>
                        <button onClick={() => addSection('image')} className="p-2 bg-white rounded-xl shadow-sm border border-slate-100 hover:border-accent transition-colors"><ImageIcon size={18} /></button>
                        <button onClick={() => addSection('video')} className="p-2 bg-white rounded-xl shadow-sm border border-slate-100 hover:border-accent transition-colors"><Video size={18} /></button>
+                       <button onClick={resetToDefault} className="p-2 bg-red-50 text-red-500 rounded-xl shadow-sm border border-red-100 hover:bg-red-500 hover:text-white transition-all" title="Reset to Defaults"><Trash2 size={18} /></button>
                     </div>
                   </div>
 

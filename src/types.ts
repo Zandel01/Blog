@@ -56,8 +56,8 @@ export interface AppData {
 
 export const DEFAULT_THEME: BlogTheme = {
   backgroundColor: '#FFFDF0',
-  profileImage: 'input_file_0.png',
-  profileCoverImage: 'input_file_1.png',
+  profileImage: 'input_file_1.png',
+  profileCoverImage: 'https://images.unsplash.com/photo-1516321497487-e288fb19713f?q=80&w=2070&auto=format&fit=crop',
   profileName: 'Zandel Ragay',
   profileDesignation: 'group member',
   profileBio: 'Passionately exploring the intersections of electronics, pedagogy, and modern design within the BTVTED-ELEXT course.',
