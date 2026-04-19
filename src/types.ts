@@ -48,6 +48,7 @@ export interface BlogSite {
   socials: SocialLink[];
   updatedAt: number;
   isActive?: boolean;
+  password?: string;
 }
 
 export interface AppData {

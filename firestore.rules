@@ -19,7 +19,9 @@ service cloud.firestore {
         && data.blogData is list
         && data.theme is map
         && data.socials is list
-        && data.updatedAt is number;
+        && data.updatedAt is number
+        && (!('isActive' in data) || data.isActive is bool)
+        && (!('password' in data) || data.password is string);
     }
 
     match /sites/{siteId} {
